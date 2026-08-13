@@ -1,5 +1,5 @@
 class NyxgptWebAT300rc < Formula
-  desc "Release candidate 3.0.0rc4 -- nyxGPT local web UI (Next.js) service wrapper"
+  desc "Release candidate 3.0.0rc5 -- nyxGPT local web UI (Next.js) service wrapper"
   homepage "https://github.com/dkblinux98/nyxGPT"
 
   # Remote-tap counterpart of ../nyxgpt-web.rb (#3622): that formula's `url`
@@ -11,15 +11,22 @@ class NyxgptWebAT300rc < Formula
   # everything else (the self-contained Cellar build, service, test blocks)
   # is identical to the local formula on purpose -- same tarball contents,
   # same install recipe, only the source of the tarball differs.
-  url "https://github.com/dkblinux98/nyxGPT/releases/download/3.0.0rc4/nyxgpt-web-3.0.0rc4.tar.gz"
-  sha256 "ae93afda3cec8fecf2db50fde381ec4619bab43964b1e52fa9461d3ef7898b49"
-  version "3.0.0rc4"
+  url "https://github.com/dkblinux98/nyxGPT/releases/download/3.0.0rc5/nyxgpt-web-3.0.0rc5.tar.gz"
+  sha256 "9d0183668ae33920da4f1f2e76df653c6121af043332f63bdc774e65dd9075c6"
+  version "3.0.0rc5"
   license "MIT"
 
   # Acceptance-only channel (#3727): `brew install nyxgpt-web` must always
   # resolve to the latest stable release, so this is a separate formula
   # rather than a newer version of that one. Installing both would fight
   # over the same bin wrapper and the same brew service name.
+  #
+  # A tap that does not (yet) carry nyxgpt-web.rb makes brew warn that the
+  # conflict names an unknown formula, and warn is all it does -- the
+  # install proceeds (#3753). The declaration is deliberately kept
+  # unconditional: Homebrew resolves conflicts_with at load time with no
+  # way to make one tolerant, and dropping it to silence a warning would
+  # trade a cosmetic message for the silent channel clobber it prevents.
   conflicts_with "nyxgpt-web",
     because: "both install the same nyxgpt-web wrapper and brew service"
 
