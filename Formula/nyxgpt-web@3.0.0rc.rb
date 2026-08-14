@@ -1,5 +1,5 @@
 class NyxgptWebAT300rc < Formula
-  desc "Release candidate 3.0.0rc6 -- nyxGPT local web UI (Next.js) service wrapper"
+  desc "Release candidate 3.0.0rc7 -- nyxGPT local web UI (Next.js) service wrapper"
   homepage "https://github.com/dkblinux98/nyxGPT"
 
   # Remote-tap counterpart of ../nyxgpt-web.rb (#3622): that formula's `url`
@@ -11,9 +11,9 @@ class NyxgptWebAT300rc < Formula
   # everything else (the self-contained Cellar build, service, test blocks)
   # is identical to the local formula on purpose -- same tarball contents,
   # same install recipe, only the source of the tarball differs.
-  url "https://github.com/dkblinux98/nyxGPT/releases/download/3.0.0rc6/nyxgpt-web-3.0.0rc6.tar.gz"
-  sha256 "07605f1eea14aecfafc6522932d0002a2dc99e4b09a411a6cdd6ced92fcd64c5"
-  version "3.0.0rc6"
+  url "https://github.com/dkblinux98/nyxGPT/releases/download/3.0.0rc7/nyxgpt-web-3.0.0rc7.tar.gz"
+  sha256 "b42808c65558fe6905f88ee224f478c3a1b4f052fdcd55ca70b540d70a7eac08"
+  version "3.0.0rc7"
   license "MIT"
 
   # Acceptance-only channel (#3727): `brew install nyxgpt-web` must always
