@@ -1,5 +1,5 @@
 class NyxgptWebAT300rc < Formula
-  desc "Release candidate 3.0.0rc18 -- nyxGPT local web UI (Next.js) service wrapper"
+  desc "Release candidate 3.0.0rc19 -- nyxGPT local web UI (Next.js) service wrapper"
   homepage "https://github.com/dkblinux98/nyxGPT"
 
   # Remote-tap counterpart of ../nyxgpt-web.rb (#3622): that formula's `url`
@@ -11,9 +11,9 @@ class NyxgptWebAT300rc < Formula
   # everything else (the self-contained Cellar build, service, test blocks)
   # is identical to the local formula on purpose -- same tarball contents,
   # same install recipe, only the source of the tarball differs.
-  url "https://github.com/dkblinux98/nyxGPT/releases/download/3.0.0rc18/nyxgpt-web-3.0.0rc18.tar.gz"
-  sha256 "84933b8532dda52ac7dc3813d90a7499315a96d4711f2dc2403d2ff009deac39"
-  version "3.0.0rc18"
+  url "https://github.com/dkblinux98/nyxGPT/releases/download/3.0.0rc19/nyxgpt-web-3.0.0rc19.tar.gz"
+  sha256 "833aa1ef46e62bc22a8430cdb5ff4ef2dcf08240681d5a736c1f5398a82f9ab6"
+  version "3.0.0rc19"
   license "MIT"
 
   # Acceptance-only channel (#3727): `brew install nyxgpt-web` must always
@@ -48,6 +48,41 @@ class NyxgptWebAT300rc < Formula
     libexec.install Dir["*"]
     libexec.install ".next"
 
+    # Its own file, not a `<<'PY'` nested in the wrapper's heredoc: a nested
+    # body has to start at column 0, Ruby's `<<~` then strips nothing, and the
+    # wrapper gets written with an indented shebang -- which Homebrew's Cleaner
+    # reads as a non-executable text file and re-stamps 0444, undoing the
+    # `chmod 0755` below (#4043). See ../nyxgpt-web.rb's install block.
+    (libexec/"read-web-config.py").write <<~'PY'
+      """Print the web tier's host, port, api_base_url and auth key, tab-separated.
+
+      `bin/nyxgpt-web` runs this with /usr/bin/python3, so it must import
+      nothing outside the standard library.
+      """
+      import configparser
+      import os
+
+      cfg = configparser.ConfigParser()
+      cfg.read(os.path.expanduser('~/.nyxGPT/config.ini'), encoding='utf-8')
+
+      host = cfg.get('web', 'host', fallback='127.0.0.1')
+      try:
+          port = str(cfg.getint('web', 'port', fallback=3000))
+      except Exception:
+          port = '3000'
+      api_base = cfg.get('web', 'api_base_url', fallback='')
+      # The proxy in web/src/lib/apiProxy.ts attaches X-API-Key from
+      # NYXGPT_AUTH_API_KEY; without it every proxied call 401s the moment
+      # [auth] enabled is turned on (#3632).
+      try:
+          auth_on = cfg.getboolean('auth', 'enabled', fallback=False)
+      except Exception:
+          auth_on = False
+      api_key = cfg.get('auth', 'api_key', fallback='').strip() if auth_on else ''
+
+      print(f"{host}\t{port}\t{api_base}\t{api_key}")
+    PY
+
     (bin/"nyxgpt-web").write <<~SH
       #!/usr/bin/env bash
       set -euo pipefail
@@ -70,31 +105,7 @@ class NyxgptWebAT300rc < Formula
       AUTH_KEY=""
 
       if [ -f "$CONFIG_FILE" ]; then
-        IFS=$'\t' read -r HOST PORT API_BASE AUTH_KEY < <("$SYS_PY" - <<'PY'
-import configparser
-import os
-
-cfg = configparser.ConfigParser()
-cfg.read(os.path.expanduser('~/.nyxGPT/config.ini'), encoding='utf-8')
-
-host = cfg.get('web', 'host', fallback='127.0.0.1')
-try:
-    port = str(cfg.getint('web', 'port', fallback=3000))
-except Exception:
-    port = '3000'
-api_base = cfg.get('web', 'api_base_url', fallback='')
-# The proxy in web/src/lib/apiProxy.ts attaches X-API-Key from
-# NYXGPT_AUTH_API_KEY; without it every proxied call 401s the moment
-# [auth] enabled is turned on (#3632).
-try:
-    auth_on = cfg.getboolean('auth', 'enabled', fallback=False)
-except Exception:
-    auth_on = False
-api_key = cfg.get('auth', 'api_key', fallback='').strip() if auth_on else ''
-
-print(f"{host}\t{port}\t{api_base}\t{api_key}")
-PY
-)
+        IFS=$'\t' read -r HOST PORT API_BASE AUTH_KEY < <("$SYS_PY" "#{libexec}/read-web-config.py")
       fi
 
       export HOST="$HOST"
@@ -113,9 +124,10 @@ PY
       cd "#{libexec}"
       exec npm run start
     SH
-    # Best-effort exec bit -- Homebrew's post-install Cleaner resets keg
-    # scripts to 0444 regardless, which is why the service below launches
-    # the wrapper via `/bin/bash` (see ../nyxgpt-web.rb).
+    # The exec bit for anyone invoking the wrapper directly. The Cleaner
+    # re-stamps a real shebang script to 0555 and keeps it runnable; the old
+    # "0444 regardless" note here was the indented shebang's symptom (#4043).
+    # The service below still runs it via `/bin/bash` (see ../nyxgpt-web.rb).
     system "chmod", "0755", bin/"nyxgpt-web"
   end
 
