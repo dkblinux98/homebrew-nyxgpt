@@ -11,10 +11,30 @@ class NyxgptWeb < Formula
   # everything else (the self-contained Cellar build, service, test blocks)
   # is identical to the local formula on purpose -- same tarball contents,
   # same install recipe, only the source of the tarball differs.
-  url "https://github.com/dkblinux98/nyxGPT/releases/download/2.1.0-homebrew/nyxgpt-web-2.1.0.tar.gz"
-  sha256 "9f40748215dfb76fc71b781fb99ce86703bdc9e793502ae8d1bb5f036c4deae1"
-  version "2.1.0"
+  url "https://github.com/dkblinux98/nyxGPT/releases/download/3.0.0-homebrew/nyxgpt-web-3.0.0.tar.gz"
+  sha256 "cab553997ddaa9c48b53fe761c39a7079781f898b93daa65cddc739e29510eaf"
+  version "3.0.0"
   license "MIT"
+
+  # The other direction of the candidate channel's own declaration (#3853).
+  # `conflicts_with` is directional: until this line existed, installing
+  # nyxgpt-web onto a machine already carrying nyxgpt-web@3.0.0rc was checked by
+  # nothing -- brew built the keg to completion and only failed `brew link`
+  # on the symlink collision, leaving BOTH kegs installed, both registering
+  # a `keep_alive true` service on the same port. Established by running it,
+  # not by reading: ledger Q-002 / #3860, run 32202943938.
+  #
+  # Names this release line's candidate only. Another line's (nyxgpt-web@X.Y.Zrc
+  # for a different X.Y.Z) is retired by name at that line's release ceremony,
+  # and a formula cannot enumerate candidates that do not exist yet -- those
+  # are caught at runtime by `nyxgpt ops install`'s superseded-service step.
+  #
+  # A tap not carrying nyxgpt-web@3.0.0rc.rb makes brew warn that the conflict names
+  # an unknown formula, and warn is all it does (#3753) -- the same benign
+  # case the rc formula's own declaration has always had.
+  conflicts_with "nyxgpt-web@3.0.0rc",
+    because: "both install the same nyxgpt-web wrapper and brew service"
+
   depends_on "node"
 
   def install
@@ -29,6 +49,41 @@ class NyxgptWeb < Formula
     # output needs its own explicit copy.
     libexec.install Dir["*"]
     libexec.install ".next"
+
+    # Its own file, not a `<<'PY'` nested in the wrapper's heredoc: a nested
+    # body has to start at column 0, Ruby's `<<~` then strips nothing, and the
+    # wrapper gets written with an indented shebang -- which Homebrew's Cleaner
+    # reads as a non-executable text file and re-stamps 0444, undoing the
+    # `chmod 0755` below (#4043). See ../nyxgpt-web.rb's install block.
+    (libexec/"read-web-config.py").write <<~'PY'
+      """Print the web tier's host, port, api_base_url and auth key, tab-separated.
+
+      `bin/nyxgpt-web` runs this with /usr/bin/python3, so it must import
+      nothing outside the standard library.
+      """
+      import configparser
+      import os
+
+      cfg = configparser.ConfigParser()
+      cfg.read(os.path.expanduser('~/.nyxGPT/config.ini'), encoding='utf-8')
+
+      host = cfg.get('web', 'host', fallback='127.0.0.1')
+      try:
+          port = str(cfg.getint('web', 'port', fallback=3000))
+      except Exception:
+          port = '3000'
+      api_base = cfg.get('web', 'api_base_url', fallback='')
+      # The proxy in web/src/lib/apiProxy.ts attaches X-API-Key from
+      # NYXGPT_AUTH_API_KEY; without it every proxied call 401s the moment
+      # [auth] enabled is turned on (#3632).
+      try:
+          auth_on = cfg.getboolean('auth', 'enabled', fallback=False)
+      except Exception:
+          auth_on = False
+      api_key = cfg.get('auth', 'api_key', fallback='').strip() if auth_on else ''
+
+      print(f"{host}\t{port}\t{api_base}\t{api_key}")
+    PY
 
     (bin/"nyxgpt-web").write <<~SH
       #!/usr/bin/env bash
@@ -52,31 +107,7 @@ class NyxgptWeb < Formula
       AUTH_KEY=""
 
       if [ -f "$CONFIG_FILE" ]; then
-        IFS=$'\t' read -r HOST PORT API_BASE AUTH_KEY < <("$SYS_PY" - <<'PY'
-import configparser
-import os
-
-cfg = configparser.ConfigParser()
-cfg.read(os.path.expanduser('~/.nyxGPT/config.ini'), encoding='utf-8')
-
-host = cfg.get('web', 'host', fallback='127.0.0.1')
-try:
-    port = str(cfg.getint('web', 'port', fallback=3000))
-except Exception:
-    port = '3000'
-api_base = cfg.get('web', 'api_base_url', fallback='')
-# The proxy in web/src/lib/apiProxy.ts attaches X-API-Key from
-# NYXGPT_AUTH_API_KEY; without it every proxied call 401s the moment
-# [auth] enabled is turned on (#3632).
-try:
-    auth_on = cfg.getboolean('auth', 'enabled', fallback=False)
-except Exception:
-    auth_on = False
-api_key = cfg.get('auth', 'api_key', fallback='').strip() if auth_on else ''
-
-print(f"{host}\t{port}\t{api_base}\t{api_key}")
-PY
-)
+        IFS=$'\t' read -r HOST PORT API_BASE AUTH_KEY < <("$SYS_PY" "#{libexec}/read-web-config.py")
       fi
 
       export HOST="$HOST"
@@ -95,9 +126,10 @@ PY
       cd "#{libexec}"
       exec npm run start
     SH
-    # Best-effort exec bit -- Homebrew's post-install Cleaner resets keg
-    # scripts to 0444 regardless, which is why the service below launches
-    # the wrapper via `/bin/bash` (see ../nyxgpt-web.rb).
+    # The exec bit for anyone invoking the wrapper directly. The Cleaner
+    # re-stamps a real shebang script to 0555 and keeps it runnable; the old
+    # "0444 regardless" note here was the indented shebang's symptom (#4043).
+    # The service below still runs it via `/bin/bash` (see ../nyxgpt-web.rb).
     system "chmod", "0755", bin/"nyxgpt-web"
   end
 
@@ -108,11 +140,96 @@ PY
     error_log_path var/"log/nyxgpt-web.err.log"
   end
 
+  # Same reason as ./nyxgpt-api.rb.tmpl and ../nyxgpt-web.rb (#3854): without
+  # `caveats`, Homebrew's generated `brew services start` line is the only
+  # instruction printed, and it starts this keg alone. The `nyxgpt` command
+  # itself lives in the api keg, so name that formula rather than assume it --
+  # derived from `name` so the rc channel points at `nyxgpt-api@<line>rc`.
+  #
+  # It also carries the teardown guidance (#3859), which arrived on v3.0.0 as a
+  # second `caveats` block. Ruby keeps only the last definition of a method, so
+  # two blocks in one formula is not two messages -- it is one silently winning
+  # and the other never printed, with `ruby -c` clean either way. They are one
+  # block for that reason: `brew uninstall` does not stop a formula's service
+  # first and Homebrew has no uninstall hook that could, so it deletes the keg's
+  # files out from under a running process that goes on serving from memory;
+  # `brew untap` then makes the formula name unresolvable, leaving services the
+  # operator cannot name to stop. nyxGPT's own `com.nyxgpt.*` LaunchAgents
+  # Homebrew never knew about. Caveats are the one place the operator is
+  # actually standing when they decide to remove nyxGPT.
+  def caveats
+    api_formula = name.sub("nyxgpt-web", "nyxgpt-api")
+    <<~EOS
+      To start nyxGPT, run:
+        nyxgpt up
+
+      That brings up the whole stack -- this web UI, the API, Ollama, Cassandra
+      and the observability services -- waits for it to report healthy, and
+      prints the web UI URL. `nyxgpt down` stops it again, and `nyxgpt ops
+      status` shows what is running.
+
+      The `nyxgpt` command is installed by the #{api_formula} formula:
+        brew install #{api_formula}
+
+      If you were pointed at `brew services start #{name}`, note
+      that it starts only this one service. It does not start the API this UI
+      talks to, it does not install or start Ollama, it does not create the
+      Cassandra container, and it does not start observability. A web UI
+      brought up that way fails to load sessions. Use it to control this
+      individual service once `nyxgpt up` has set the stack up -- not instead
+      of it.
+
+      `nyxgpt up` starts the Homebrew services for you, so they still restart
+      at login.
+
+      Before removing nyxGPT, run the wrapped teardown FIRST:
+        nyxgpt ops uninstall
+
+      It stops and deregisters everything the install put on this machine --
+      the Homebrew services, the com.nyxgpt.* LaunchAgents nyxGPT installed
+      itself, and the containers. Your data in ~/.nyxGPT is preserved.
+
+      Only then remove the artifacts:
+        brew uninstall #{name}
+        brew untap #{tap || "<your-tap>"}
+
+      Uninstalling first leaves #{name} running from deleted files on its
+      port, with no supported command left to stop it.
+    EOS
+  end
+
   test do
-    # We only validate that the wrapper script and the production build it
-    # runs both exist. (The actual Next.js runtime is exercised by
-    # integration tests in the repo.)
     assert_predicate bin/"nyxgpt-web", :exist?
     assert_predicate libexec/".next", :exist?
+
+    # And the server has to actually come up, not merely be present (#3860):
+    # `npm prune --omit=dev` once left a keg whose `next start` crash-looped
+    # while `.next` sat there intact (#3406). See ../nyxgpt-web.rb's test
+    # block for the full account -- this is the same test, and deliberately
+    # so: the published keg is built from the same tarball by the same recipe.
+    port = free_port
+    ENV["HOME"] = testpath
+    (testpath/".nyxGPT").mkpath
+    (testpath/".nyxGPT/config.ini").write <<~INI
+      [web]
+      host = 127.0.0.1
+      port = #{port}
+    INI
+
+    pid = spawn "/bin/bash", bin/"nyxgpt-web", pgroup: true
+    begin
+      code = "000"
+      60.times do
+        sleep 2
+        code = shell_output(
+          "curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:#{port}/ || true",
+        ).strip
+        break if code == "200"
+      end
+      assert_equal "200", code
+    ensure
+      Process.kill "TERM", -Process.getpgid(pid)
+      Process.wait pid
+    end
   end
 end
