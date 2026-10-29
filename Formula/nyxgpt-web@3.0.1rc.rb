@@ -1,5 +1,5 @@
 class NyxgptWebAT301rc < Formula
-  desc "Release candidate 3.0.1rc1 -- nyxGPT local web UI (Next.js) service wrapper"
+  desc "Release candidate 3.0.1rc2 -- nyxGPT local web UI (Next.js) service wrapper"
   homepage "https://github.com/dkblinux98/nyxGPT"
 
   # Remote-tap counterpart of ../nyxgpt-web.rb (#3622): that formula's `url`
@@ -11,9 +11,9 @@ class NyxgptWebAT301rc < Formula
   # everything else (the self-contained Cellar build, service, test blocks)
   # is identical to the local formula on purpose -- same tarball contents,
   # same install recipe, only the source of the tarball differs.
-  url "https://github.com/dkblinux98/nyxGPT/releases/download/3.0.1rc1/nyxgpt-web-3.0.1rc1.tar.gz"
-  sha256 "9d6f867619ff3635e9e60dbc995103acd49a20282653963349f7033d0dffce54"
-  version "3.0.1rc1"
+  url "https://github.com/dkblinux98/nyxGPT/releases/download/3.0.1rc2/nyxgpt-web-3.0.1rc2.tar.gz"
+  sha256 "d0436cf579536e07b55e5ee13500f5237c1b7fd60bc4b1f3cc868437ff107d4f"
+  version "3.0.1rc2"
   license "MIT"
 
   # Acceptance-only channel (#3727): `brew install nyxgpt-web` must always
@@ -33,16 +33,50 @@ class NyxgptWebAT301rc < Formula
   conflicts_with "nyxgpt-web",
     because: "both install the same nyxgpt-web wrapper and brew service"
 
-  depends_on "node"
+  # The VERSIONED keg, identical to ../nyxgpt-web.rb and for the same reason
+  # (#4194): `depends_on "node"` resolves to whatever major homebrew-core has
+  # moved to, so the published keg -- the one a user with no checkout installs
+  # -- was the surface with no Node declaration at all. `node@NN` is keg-only,
+  # so this keg's `node` is reachable at `opt_bin` and not via `PATH`, and
+  # `brew upgrade node` cannot move it.
+  #
+  # The major is nyxGPT's one Node declaration (`.nvmrc` /
+  # `node_runtime.NODE_MAJOR`), held equal by
+  # `tests/unit/test_node_version_declaration.py`.
+  depends_on "node@24"
 
   def install
+    # nyxGPT's one remote-fetch policy (#4205). Set here because Homebrew
+    # builds under a sanitized environment, so an NPM_CONFIG_* exported by
+    # `ops install` never reaches this `npm`. Numbers from
+    # src/nyxgpt/build_fetch_policy.py; the guard test fails on drift.
+    ENV["NPM_CONFIG_FETCH_RETRIES"] = "5"
+    ENV["NPM_CONFIG_FETCH_RETRY_MINTIMEOUT"] = "2000"
+    ENV["NPM_CONFIG_FETCH_RETRY_MAXTIMEOUT"] = "60000"
+    ENV["NPM_CONFIG_FETCH_TIMEOUT"] = "300000"
+
     system "npm", "ci"
+    # `npm ci` exits **0** with an empty node_modules when the registry is
+    # unreachable, so `system` raising is not enough -- see ../nyxgpt-web.rb
+    # and #4205. npm's completed-reify receipt is the check.
+    receipt = buildpath/"node_modules/.package-lock.json"
+    odie <<~MSG unless receipt.file? && receipt.size.positive?
+      nyxgpt-build: remote fetch did not complete: 'npm ci' left an incomplete
+      node_modules -- the package registry was most likely unreachable.
+      Retry with `nyxgpt ops install` once the registry is reachable.
+    MSG
+
     system "npm", "run", "build"
     # Drop devDependencies now that the production build exists to slim the
     # keg, but restore typescript -- `next start` re-reads next.config.ts at
     # boot and needs it to transpile, see ../nyxgpt-web.rb.
     system "npm", "prune", "--omit=dev"
     system "npm", "install", "--no-save", "typescript"
+    odie <<~MSG unless (buildpath/"node_modules/typescript/package.json").exist?
+      nyxgpt-build: remote fetch did not complete: 'npm install --no-save
+      typescript' did not install typescript -- the package registry was most
+      likely unreachable. Retry with `nyxgpt ops install`.
+    MSG
     # `Dir["*"]` skips dotfiles/dotdirs -- the `.next` production build
     # output needs its own explicit copy.
     libexec.install Dir["*"]
@@ -90,8 +124,10 @@ class NyxgptWebAT301rc < Formula
       # launchd/Homebrew services often run with a minimal PATH.
       export PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
 
-      # Prefer the Node installed by Homebrew.
-      export PATH="#{Formula["node"].opt_bin}:#{Formula["node"].opt_libexec}/bin:${PATH}"
+      # The DECLARED Node, ahead of everything (#4194) -- the `node@24` keg,
+      # not the unversioned `node` in /opt/homebrew/bin that the line above
+      # puts on PATH. See ../nyxgpt-web.rb.
+      export PATH="#{Formula["node@24"].opt_bin}:#{Formula["node@24"].opt_libexec}/bin:${PATH}"
 
       CONFIG_FILE="$HOME/.nyxGPT/config.ini"
       SYS_PY="/usr/bin/python3"
@@ -120,6 +156,9 @@ class NyxgptWebAT301rc < Formula
       echo "nyxgpt-web starting (self-contained Cellar build)" >&2
       echo "  host: $HOST" >&2
       echo "  port: $PORT" >&2
+      # Which Node this service actually resolved (#4194), in its own log --
+      # see ../nyxgpt-web.rb.
+      echo "  node: $(command -v node) $(node -v 2>/dev/null || echo unknown)" >&2
 
       cd "#{libexec}"
       exec npm run start
@@ -199,6 +238,15 @@ class NyxgptWebAT301rc < Formula
   test do
     assert_predicate bin/"nyxgpt-web", :exist?
     assert_predicate libexec/".next", :exist?
+
+    # The keg runs the DECLARED Node, not whatever `node` is on PATH (#4194).
+    # Asserted in the formula because this is the only place the question can
+    # be asked of the installed keg itself: `brew test` runs with the user's
+    # PATH, so reading `node -v` here would answer about their shell. The
+    # dependency's own `opt_bin` is what the wrapper prepends, so it is what
+    # has to be major 24.
+    node_version = shell_output("#{Formula["node@24"].opt_bin}/node -v").strip
+    assert_match(/^v24\./, node_version)
 
     # And the server has to actually come up, not merely be present (#3860):
     # `npm prune --omit=dev` once left a keg whose `next start` crash-looped
